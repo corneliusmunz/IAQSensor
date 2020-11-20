@@ -3,19 +3,19 @@
 #include "ESPAsyncWebServer.h"
 #include "M5Atom.h"
 #include <ESPmDNS.h>
+#include "bsec.h"
 
 // Replace with your network credentials
 const char *ssid = "Fuchshof";
 const char *password = "Luftqualitaet";
 
-//Adafruit_BME680 bme; // I2C
-//Adafruit_BME680 bme(BME_CS); // hardware SPI
-//Adafruit_BME680 bme(BME_CS, BME_MOSI, BME_MISO, BME_SCK);
+String output;
 
-float temperature;
-float humidity;
-float pressure;
-float gasResistance;
+// Helper functions declarations
+void checkIaqSensorStatus(void);
+
+// Create an object of the class Bsec
+Bsec iaqSensor;
 
 AsyncWebServer server(80);
 AsyncEventSource events("/events");
@@ -23,61 +23,24 @@ AsyncEventSource events("/events");
 unsigned long lastTime = 0;
 unsigned long timerDelay = 2000; // send readings timer
 
-void getBME680Readings()
-{
-  // Tell BME680 to begin measurement.
-  /*
-  unsigned long endTime = bme.beginReading();
-  if (endTime == 0) {
-    Serial.println(F("Failed to begin reading :("));
-    return;
-  }
-  if (!bme.endReading()) {
-    Serial.println(F("Failed to complete reading :("));
-    return;
-  }
-  */
-  temperature = random(0, 100);   //bme.temperature;
-  pressure = random(0, 100);      //bme.pressure / 100.0;
-  humidity = random(0, 100);      //bme.humidity;
-  gasResistance = random(0, 100); //bme.gas_resistance / 1000.0;
-
-  if (gasResistance < 33)
-  {
-    M5.dis.fillpix(CRGB::Green);
-    M5.update();
-  }
-  else if (gasResistance < 66)
-  {
-    M5.dis.fillpix(CRGB::Orange);
-    M5.update();
-  }
-  else
-  {
-    M5.dis.fillpix(CRGB::Red);
-    M5.update();
-  }
-}
 
 String processor(const String &var)
 {
-  getBME680Readings();
-  //Serial.println(var);
   if (var == "TEMPERATURE")
   {
-    return String(temperature);
+    return String(iaqSensor.temperature);
   }
   else if (var == "HUMIDITY")
   {
-    return String(humidity);
+    return String(iaqSensor.humidity);
   }
   else if (var == "PRESSURE")
   {
-    return String(pressure);
+    return String(iaqSensor.pressure/100);
   }
   else if (var == "GAS")
   {
-    return String(gasResistance);
+    return String(iaqSensor.iaq);
   }
 }
 
@@ -101,7 +64,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     .card.temperature { color: #0e7c7b; }
     .card.humidity { color: #17bebb; }
     .card.pressure { color: #3fca6b; }
-    .card.gas { color: #d62246; }
+    .card.iaq { color: #d62246; }
     .header-wrap { padding: 10px 0 0 0; height: auto; position: relative; background: url(http://www.fuchshofschule.de/templates/school/images/header-w.png) 0 0 repeat-x;
 }
   </style>
@@ -123,7 +86,7 @@ const char index_html[] PROGMEM = R"rawliteral(
       <div class="card pressure">
         <h4><i class="fas fa-angle-double-down"></i> LUFTDRUCK</h4><p><span class="reading"><span id="pres">%PRESSURE%</span> hPa</span></p>
       </div>
-      <div class="card gas">
+      <div class="card iaq">
         <h4><i class="fas fa-wind"></i> LUFTQUALIT&Auml;T</h4><p><span class="reading"><span id="gas">%GAS%</span></span></p>
       </div>
     </div>
@@ -182,26 +145,38 @@ void setup()
 
   Serial.print("locl ip: ");
   Serial.println(WiFi.localIP());
-  if (!MDNS.begin("fuchshof")) {
+  if (!MDNS.begin("fuchshof"))
+  {
     Serial.println("mDNS failed");
-  }else{
+  }
+  else
+  {
     Serial.println("fuchshof.local successfully applied");
   }
 
+  Wire.begin();
 
-  // Init BME680 sensor
-  /*
-  if (!bme.begin()) {
-    Serial.println(F("Could not find a valid BME680 sensor, check wiring!"));
-    while (1);
-  }
-  // Set up oversampling and filter initialization
-  bme.setTemperatureOversampling(BME680_OS_8X);
-  bme.setHumidityOversampling(BME680_OS_2X);
-  bme.setPressureOversampling(BME680_OS_4X);
-  bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
-  bme.setGasHeater(320, 150); // 320*C for 150 ms
-*/
+  iaqSensor.begin(BME680_I2C_ADDR_PRIMARY, Wire);
+  output = "\nBSEC library version " + String(iaqSensor.version.major) + "." + String(iaqSensor.version.minor) + "." + String(iaqSensor.version.major_bugfix) + "." + String(iaqSensor.version.minor_bugfix);
+  Serial.println(output);
+  checkIaqSensorStatus();
+
+  bsec_virtual_sensor_t sensorList[10] = {
+      BSEC_OUTPUT_RAW_TEMPERATURE,
+      BSEC_OUTPUT_RAW_PRESSURE,
+      BSEC_OUTPUT_RAW_HUMIDITY,
+      BSEC_OUTPUT_RAW_GAS,
+      BSEC_OUTPUT_IAQ,
+      BSEC_OUTPUT_STATIC_IAQ,
+      BSEC_OUTPUT_CO2_EQUIVALENT,
+      BSEC_OUTPUT_BREATH_VOC_EQUIVALENT,
+      BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE,
+      BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY,
+  };
+
+  iaqSensor.updateSubscription(sensorList, 10, BSEC_SAMPLE_RATE_LP);
+  checkIaqSensorStatus();
+
   // Handle Web Server
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send_P(200, "text/html", index_html, processor);
@@ -221,24 +196,82 @@ void setup()
   server.begin();
 }
 
+// Helper function definitions
+void checkIaqSensorStatus(void)
+{
+  if (iaqSensor.status != BSEC_OK)
+  {
+    if (iaqSensor.status < BSEC_OK)
+    {
+      output = "BSEC error code : " + String(iaqSensor.status);
+      Serial.println(output);
+    }
+    else
+    {
+      output = "BSEC warning code : " + String(iaqSensor.status);
+      Serial.println(output);
+    }
+  }
+
+  if (iaqSensor.bme680Status != BME680_OK)
+  {
+    if (iaqSensor.bme680Status < BME680_OK)
+    {
+      output = "BME680 error code : " + String(iaqSensor.bme680Status);
+      Serial.println(output);
+    }
+    else
+    {
+      output = "BME680 warning code : " + String(iaqSensor.bme680Status);
+      Serial.println(output);
+    }
+  }
+}
+
 void loop()
 {
-  if ((millis() - lastTime) > timerDelay)
-  {
-    getBME680Readings();
-    Serial.printf("Temperature = %.2f ºC \n", temperature);
-    Serial.printf("Humidity = %.2f % \n", humidity);
-    Serial.printf("Pressure = %.2f hPa \n", pressure);
-    Serial.printf("Gas Resistance = %.2f KOhm \n", gasResistance);
-    Serial.println();
 
+  unsigned long time_trigger = millis();
+  if (iaqSensor.run())
+  { // If new data is available
+    output = String(time_trigger);
+    output += ", " + String(iaqSensor.rawTemperature);
+    output += ", " + String(iaqSensor.pressure);
+    output += ", " + String(iaqSensor.rawHumidity);
+    output += ", " + String(iaqSensor.gasResistance);
+    output += ", " + String(iaqSensor.iaq);
+    output += ", " + String(iaqSensor.iaqAccuracy);
+    output += ", " + String(iaqSensor.temperature);
+    output += ", " + String(iaqSensor.humidity);
+    output += ", " + String(iaqSensor.staticIaq);
+    output += ", " + String(iaqSensor.co2Equivalent);
+    output += ", " + String(iaqSensor.breathVocEquivalent);
+    Serial.println(output);
     // Send Events to the Web Server with the Sensor Readings
     events.send("ping", NULL, millis());
-    events.send(String(temperature).c_str(), "temperature", millis());
-    events.send(String(humidity).c_str(), "humidity", millis());
-    events.send(String(pressure).c_str(), "pressure", millis());
-    events.send(String(gasResistance).c_str(), "gas", millis());
+    events.send(String(iaqSensor.temperature).c_str(), "temperature", millis());
+    events.send(String(iaqSensor.humidity).c_str(), "humidity", millis());
+    events.send(String(iaqSensor.pressure/100).c_str(), "pressure", millis());
+    events.send(String(iaqSensor.iaq).c_str(), "gas", millis());
 
-    lastTime = millis();
+    if (iaqSensor.iaq < 33)
+    {
+      M5.dis.fillpix(CRGB::Green);
+      M5.update();
+    }
+    else if (iaqSensor.iaq < 66)
+    {
+      M5.dis.fillpix(CRGB::Orange);
+      M5.update();
+    }
+    else
+    {
+      M5.dis.fillpix(CRGB::Red);
+      M5.update();
+    }
+  }
+  else
+  {
+    checkIaqSensorStatus();
   }
 }
