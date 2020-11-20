@@ -2,10 +2,11 @@
 #include <WiFi.h>
 #include "ESPAsyncWebServer.h"
 #include "M5Atom.h"
+#include <ESPmDNS.h>
 
 // Replace with your network credentials
-const char *ssid = "Netport";
-const char *password = "!Ensinger159Sport";
+const char *ssid = "Fuchshof";
+const char *password = "Luftqualitaet";
 
 //Adafruit_BME680 bme; // I2C
 //Adafruit_BME680 bme(BME_CS); // hardware SPI
@@ -176,19 +177,17 @@ void setup()
   delay(50);
   M5.dis.fillpix(CRGB::Red);
 
-  // Set the device as a Station and Soft Access Point simultaneously
-  WiFi.mode(WIFI_AP_STA);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ssid, password);
 
-  // Set device as a Wi-Fi Station
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(1000);
-    Serial.println("Setting as a Wi-Fi Station..");
-  }
-  Serial.print("Station IP Address: ");
+  Serial.print("locl ip: ");
   Serial.println(WiFi.localIP());
-  Serial.println();
+  if (!MDNS.begin("fuchshof")) {
+    Serial.println("mDNS failed");
+  }else{
+    Serial.println("fuchshof.local successfully applied");
+  }
+
 
   // Init BME680 sensor
   /*
