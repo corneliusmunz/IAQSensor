@@ -1,28 +1,39 @@
 
 #include <WiFi.h>
 #include "ESPAsyncWebServer.h"
-#include "M5Atom.h"
 #include <ESPmDNS.h>
+#include <EEPROM.h>
 #include "bsec.h"
+#include <SD.h>
+#include <SPI.h>
 
 // Replace with your network credentials
 const char *ssid = "Fuchshof";
 const char *password = "Luftqualitaet";
+File myFile;
 
-String output;
+const uint8_t bsec_config_iaq[] = {
+#include "config/generic_33v_3s_4d/bsec_iaq.txt"
+};
+
+#define STATE_SAVE_PERIOD UINT32_C(60 * 60 * 1000) // 360 minutes - 4 times a day
 
 // Helper functions declarations
 void checkIaqSensorStatus(void);
+void loadState(void);
+void updateState(void);
 
 // Create an object of the class Bsec
 Bsec iaqSensor;
+String output;
+uint8_t bsecState[BSEC_MAX_STATE_BLOB_SIZE] = {0};
+uint16_t stateUpdateCounter = 0;
 
 AsyncWebServer server(80);
 AsyncEventSource events("/events");
 
 unsigned long lastTime = 0;
 unsigned long timerDelay = 2000; // send readings timer
-
 
 String processor(const String &var)
 {
@@ -36,7 +47,7 @@ String processor(const String &var)
   }
   else if (var == "PRESSURE")
   {
-    return String(iaqSensor.pressure/100);
+    return String(iaqSensor.pressure / 100);
   }
   else if (var == "GAS")
   {
@@ -136,9 +147,20 @@ void setup()
 {
   Serial.begin(115200);
 
-  M5.begin(true, false, true);
-  delay(50);
-  M5.dis.fillpix(CRGB::Red);
+  pinMode(SS, OUTPUT);
+  digitalWrite(SS, HIGH);
+
+  // SD Card Initialization
+  if (SD.begin(SS))
+  {
+    Serial.println("SD card is ready to use.");
+  }
+  else
+  {
+    Serial.println("SD card initialization failed");
+    return;
+  }
+
 
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ssid, password);
@@ -160,6 +182,9 @@ void setup()
   output = "\nBSEC library version " + String(iaqSensor.version.major) + "." + String(iaqSensor.version.minor) + "." + String(iaqSensor.version.major_bugfix) + "." + String(iaqSensor.version.minor_bugfix);
   Serial.println(output);
   checkIaqSensorStatus();
+  iaqSensor.setConfig(bsec_config_iaq);
+  checkIaqSensorStatus();
+  loadState();
 
   bsec_virtual_sensor_t sensorList[10] = {
       BSEC_OUTPUT_RAW_TEMPERATURE,
@@ -194,6 +219,74 @@ void setup()
   });
   server.addHandler(&events);
   server.begin();
+}
+
+void loadState(void)
+{
+  if (EEPROM.read(0) == BSEC_MAX_STATE_BLOB_SIZE)
+  {
+    // Existing state in EEPROM
+    Serial.println("Reading state from EEPROM");
+
+    for (uint8_t i = 0; i < BSEC_MAX_STATE_BLOB_SIZE; i++)
+    {
+      bsecState[i] = EEPROM.read(i + 1);
+      Serial.println(bsecState[i], HEX);
+    }
+
+    iaqSensor.setState(bsecState);
+    checkIaqSensorStatus();
+  }
+  else
+  {
+    // Erase the EEPROM with zeroes
+    Serial.println("Erasing EEPROM");
+
+    for (uint8_t i = 0; i < BSEC_MAX_STATE_BLOB_SIZE + 1; i++)
+      EEPROM.write(i, 0);
+
+    EEPROM.commit();
+  }
+}
+
+void updateState(void)
+{
+  bool update = false;
+  /* Set a trigger to save the state. Here, the state is saved every STATE_SAVE_PERIOD with the first state being saved once the algorithm achieves full calibration, i.e. iaqAccuracy = 3 */
+  if (stateUpdateCounter == 0)
+  {
+    if (iaqSensor.iaqAccuracy >= 1)
+    {
+      update = true;
+      stateUpdateCounter++;
+    }
+  }
+  else
+  {
+    /* Update every STATE_SAVE_PERIOD milliseconds */
+    if ((stateUpdateCounter * STATE_SAVE_PERIOD) < millis())
+    {
+      update = true;
+      stateUpdateCounter++;
+    }
+  }
+
+  if (update)
+  {
+    iaqSensor.getState(bsecState);
+    checkIaqSensorStatus();
+
+    Serial.println("Writing state to EEPROM");
+
+    for (uint8_t i = 0; i < BSEC_MAX_STATE_BLOB_SIZE; i++)
+    {
+      EEPROM.write(i + 1, bsecState[i]);
+      Serial.println(bsecState[i], HEX);
+    }
+
+    EEPROM.write(0, BSEC_MAX_STATE_BLOB_SIZE);
+    EEPROM.commit();
+  }
 }
 
 // Helper function definitions
@@ -235,40 +328,52 @@ void loop()
   if (iaqSensor.run())
   { // If new data is available
     output = String(time_trigger);
-    output += ", " + String(iaqSensor.rawTemperature);
-    output += ", " + String(iaqSensor.pressure);
-    output += ", " + String(iaqSensor.rawHumidity);
-    output += ", " + String(iaqSensor.gasResistance);
-    output += ", " + String(iaqSensor.iaq);
-    output += ", " + String(iaqSensor.iaqAccuracy);
-    output += ", " + String(iaqSensor.temperature);
-    output += ", " + String(iaqSensor.humidity);
-    output += ", " + String(iaqSensor.staticIaq);
-    output += ", " + String(iaqSensor.co2Equivalent);
-    output += ", " + String(iaqSensor.breathVocEquivalent);
+    output += "; " + String(iaqSensor.rawTemperature);
+    output += "; " + String(iaqSensor.pressure);
+    output += "; " + String(iaqSensor.rawHumidity);
+    output += "; " + String(iaqSensor.gasResistance);
+    output += "; " + String(iaqSensor.iaq);
+    output += "; " + String(iaqSensor.iaqAccuracy);
+    output += "; " + String(iaqSensor.temperature);
+    output += "; " + String(iaqSensor.humidity);
+    output += "; " + String(iaqSensor.staticIaq);
+    output += "; " + String(iaqSensor.co2Equivalent);
+    output += "; " + String(iaqSensor.breathVocEquivalent);
     Serial.println(output);
+
+    // store state in EEPROM
+    updateState();
+
     // Send Events to the Web Server with the Sensor Readings
     events.send("ping", NULL, millis());
     events.send(String(iaqSensor.temperature).c_str(), "temperature", millis());
     events.send(String(iaqSensor.humidity).c_str(), "humidity", millis());
-    events.send(String(iaqSensor.pressure/100).c_str(), "pressure", millis());
+    events.send(String(iaqSensor.pressure / 100).c_str(), "pressure", millis());
     events.send(String(iaqSensor.iaq).c_str(), "gas", millis());
 
-    if (iaqSensor.iaq < 33)
+    if (!SD.exists("/iaqMeasurements.csv"))
     {
-      M5.dis.fillpix(CRGB::Green);
-      M5.update();
+      //write header
+      myFile = SD.open("/iaqMeasurements.csv", FILE_APPEND);
+      myFile.println("Time[ms]; rawTemperature; pressure; rawHumidity; gasResitance; iaq; iaqAccuracy; temperature; humidity; staticIaq; co2Equivalent; breathVocEquivalent");
+      myFile.close(); // close the file
     }
-    else if (iaqSensor.iaq < 66)
+
+    // Create/Open file
+    myFile = SD.open("/iaqMeasurements.csv", FILE_APPEND);
+
+    // if the file opened okay, write to it:
+    if (myFile)
     {
-      M5.dis.fillpix(CRGB::Orange);
-      M5.update();
+      myFile.println(output);
+      myFile.close(); // close the file
     }
+    // if the file didn't open, print an error:
     else
     {
-      M5.dis.fillpix(CRGB::Red);
-      M5.update();
+      Serial.println("error opening iaqMeasurements.csv");
     }
+
   }
   else
   {
