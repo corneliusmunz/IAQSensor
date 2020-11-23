@@ -6,11 +6,17 @@
 #include "bsec.h"
 #include <SD.h>
 #include <SPI.h>
+#include <FastLED.h>
+#include "SSD1306.h"
+
 
 // Replace with your network credentials
 const char *ssid = "Fuchshof";
 const char *password = "Luftqualitaet";
 File myFile;
+CRGB leds[1];
+SSD1306 display(0x3c, 4, 15);
+
 
 const uint8_t bsec_config_iaq[] = {
 #include "config/generic_33v_3s_4d/bsec_iaq.txt"
@@ -143,12 +149,25 @@ if (!!window.EventSource) {
 </body>
 </html>)rawliteral";
 
+static void InitOledDisplay()
+{
+  pinMode(16, OUTPUT);
+  digitalWrite(16, LOW);
+  delay(50);
+  digitalWrite(16, HIGH);
+  display.init();
+  display.clear();
+  display.display();
+}
+
 void setup()
 {
   Serial.begin(115200);
 
   pinMode(SS, OUTPUT);
   digitalWrite(SS, HIGH);
+
+  InitOledDisplay();
 
   // SD Card Initialization
   if (SD.begin(SS))
@@ -161,6 +180,12 @@ void setup()
     return;
   }
 
+  pinMode(13, OUTPUT);
+  delay(50);
+  FastLED.addLeds<WS2812B, 13, GRB>(leds, 1);
+  FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);
+  FastLED.setBrightness(25); //0..255
+  FastLED.setTemperature(Tungsten40W);
 
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ssid, password);
@@ -176,7 +201,7 @@ void setup()
     Serial.println("fuchshof.local successfully applied");
   }
 
-  Wire.begin();
+  Wire.begin(4, 15);
 
   iaqSensor.begin(BME680_I2C_ADDR_PRIMARY, Wire);
   output = "\nBSEC library version " + String(iaqSensor.version.major) + "." + String(iaqSensor.version.minor) + "." + String(iaqSensor.version.major_bugfix) + "." + String(iaqSensor.version.minor_bugfix);
@@ -321,6 +346,42 @@ void checkIaqSensorStatus(void)
   }
 }
 
+void setOledStatus() {
+
+  String oledOutputIaq = "IAQ: ";
+  oledOutputIaq += String(iaqSensor.iaq);
+  String oledOutputTemp = "TEMP: ";
+  oledOutputTemp += String(iaqSensor.temperature);
+  String oledOutputHumidity = "HUM: ";
+  oledOutputHumidity += String(iaqSensor.humidity);
+  display.clear();
+  display.drawString(0, 0, oledOutputTemp);
+  display.drawString(0, 10, oledOutputHumidity);
+  display.drawString(0, 20, oledOutputIaq);
+  display.display();
+}
+
+void setLedStatus()
+{
+  if (iaqSensor.iaq > 151)
+  {
+    leds[0] = CRGB::Red;
+  }
+  else if (iaqSensor.iaq > 101)
+  {
+    leds[0] = CRGB::Orange;
+  }
+  else if (iaqSensor.iaq > 51)
+  {
+    leds[0] = CRGB::Yellow;
+  }
+  else
+  {
+    leds[0] = CRGB::Green;
+  }    
+  FastLED.show();
+}
+
 void loop()
 {
 
@@ -339,10 +400,15 @@ void loop()
     output += "; " + String(iaqSensor.staticIaq);
     output += "; " + String(iaqSensor.co2Equivalent);
     output += "; " + String(iaqSensor.breathVocEquivalent);
+    std::replace(output.begin(), output.end(), '.', ',');
     Serial.println(output);
 
     // store state in EEPROM
     updateState();
+
+    // set Led status
+    setLedStatus();
+    setOledStatus();
 
     // Send Events to the Web Server with the Sensor Readings
     events.send("ping", NULL, millis());
@@ -373,7 +439,6 @@ void loop()
     {
       Serial.println("error opening iaqMeasurements.csv");
     }
-
   }
   else
   {
