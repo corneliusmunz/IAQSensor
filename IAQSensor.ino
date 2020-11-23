@@ -9,22 +9,29 @@
 #include <FastLED.h>
 #include "SSD1306.h"
 
+#define USE_SD_CARD
+#define USE_OLED_DISPLAY
+#define USE_SINGLE_LED
 
 // Replace with your network credentials
 const char *ssid = "Fuchshof";
 const char *password = "Luftqualitaet";
 File myFile;
 CRGB leds[1];
-SSD1306 display(0x3c, 4, 15);
 
+#ifdef USE_OLED_DISPLAY
+SSD1306 display(0x3c, 4, 15);
+#define BAR_WIDTH 4
+#define MAX_NUMBER_HISTORY_VALUES 32
+uint8_t oledCarouselIndex = 0;
+uint8_t iaqHistory[MAX_NUMBER_HISTORY_VALUES] = {0};
+#endif
 
 const uint8_t bsec_config_iaq[] = {
 #include "config/generic_33v_3s_4d/bsec_iaq.txt"
 };
 
 #define STATE_SAVE_PERIOD UINT32_C(60 * 60 * 1000) // 360 minutes - 4 times a day
-#define BAR_WIDTH 4
-#define MAX_NUMBER_HISTORY_VALUES 32
 
 // Helper functions declarations
 void checkIaqSensorStatus(void);
@@ -36,9 +43,6 @@ Bsec iaqSensor;
 String output;
 uint8_t bsecState[BSEC_MAX_STATE_BLOB_SIZE] = {0};
 uint16_t stateUpdateCounter = 0;
-uint8_t oledCarouselIndex = 0;
-
-uint8_t iaqHistory[MAX_NUMBER_HISTORY_VALUES] = {0};
 
 AsyncWebServer server(80);
 AsyncEventSource events("/events");
@@ -154,6 +158,7 @@ if (!!window.EventSource) {
 </body>
 </html>)rawliteral";
 
+#ifdef USE_OLED_DISPLAY
 static void InitOledDisplay()
 {
   pinMode(16, OUTPUT);
@@ -165,16 +170,13 @@ static void InitOledDisplay()
   display.clear();
   display.display();
 }
+#endif
 
-void setup()
+#ifdef USE_SD_CARD
+static void InitSdCard()
 {
-  Serial.begin(115200);
-
   pinMode(SS, OUTPUT);
   digitalWrite(SS, HIGH);
-
-  InitOledDisplay();
-
   // SD Card Initialization
   if (SD.begin(SS))
   {
@@ -185,14 +187,11 @@ void setup()
     Serial.println("SD card initialization failed");
     return;
   }
+}
+#endif
 
-  pinMode(13, OUTPUT);
-  delay(50);
-  FastLED.addLeds<WS2812B, 13, GRB>(leds, 1);
-  FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);
-  FastLED.setBrightness(25); //0..255
-  FastLED.setTemperature(Tungsten40W);
-
+static void InitWebserver()
+{
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ssid, password);
 
@@ -207,6 +206,27 @@ void setup()
     Serial.println("fuchshof.local successfully applied");
   }
 
+  // Handle Web Server
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send_P(200, "text/html", index_html, processor);
+  });
+
+  // Handle Web Server Events
+  events.onConnect([](AsyncEventSourceClient *client) {
+    if (client->lastId())
+    {
+      Serial.printf("Client reconnected! Last message ID that it got is: %u\n", client->lastId());
+    }
+    // send event with message "hello!", id current millis
+    // and set reconnect delay to 1 second
+    client->send("hello!", NULL, millis(), 10000);
+  });
+  server.addHandler(&events);
+  server.begin();
+}
+
+static void InitSensor()
+{
   Wire.begin(4, 15);
 
   EEPROM.begin(BSEC_MAX_STATE_BLOB_SIZE);
@@ -234,24 +254,37 @@ void setup()
 
   iaqSensor.updateSubscription(sensorList, 10, BSEC_SAMPLE_RATE_LP);
   checkIaqSensorStatus();
+}
 
-  // Handle Web Server
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send_P(200, "text/html", index_html, processor);
-  });
+static void InitLed() 
+{
+  pinMode(13, OUTPUT);
+  delay(50);
+  FastLED.addLeds<WS2812B, 13, GRB>(leds, 1);
+  FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);
+  FastLED.setBrightness(25); //0..255
+  FastLED.setTemperature(Tungsten40W);
+}
 
-  // Handle Web Server Events
-  events.onConnect([](AsyncEventSourceClient *client) {
-    if (client->lastId())
-    {
-      Serial.printf("Client reconnected! Last message ID that it got is: %u\n", client->lastId());
-    }
-    // send event with message "hello!", id current millis
-    // and set reconnect delay to 1 second
-    client->send("hello!", NULL, millis(), 10000);
-  });
-  server.addHandler(&events);
-  server.begin();
+void setup()
+{
+  Serial.begin(115200);
+
+#ifdef USE_OLED_DISPLAY
+  InitOledDisplay();
+#endif
+
+#ifdef USE_SD_CARD
+  InitSdCard();
+#endif
+
+  InitSensor();
+  InitWebserver();
+
+#ifdef SINGLE_LED
+  InitSingleLED();
+#endif
+
 }
 
 void loadState(void)
@@ -356,14 +389,17 @@ void checkIaqSensorStatus(void)
   }
 }
 
-void setOledStatus() {
+#ifdef USE_OLED_DISPLAY
+void setOledStatus()
+{
 
   uint8_t maxIaq = 0;
-  for(int i=MAX_NUMBER_HISTORY_VALUES-1;i>0;i--) {
-    iaqHistory[i]=iaqHistory[i-1];
+  for (int i = MAX_NUMBER_HISTORY_VALUES - 1; i > 0; i--)
+  {
+    iaqHistory[i] = iaqHistory[i - 1];
     maxIaq = max(iaqHistory[i], maxIaq);
   }
-  iaqHistory[0]=(uint8_t)iaqSensor.iaq;
+  iaqHistory[0] = (uint8_t)iaqSensor.iaq;
   maxIaq = max(iaqHistory[0], maxIaq);
 
   String oledOutputIaq = "IAQ: ";
@@ -373,29 +409,41 @@ void setOledStatus() {
   String oledOutputHumidity = "HUM: ";
   oledOutputHumidity += String(iaqSensor.humidity);
   display.clear();
-  if (oledCarouselIndex == 0) {
+  if (oledCarouselIndex == 0)
+  {
     display.drawString(0, 0, oledOutputTemp);
-  } else if (oledCarouselIndex == 1) {
+  }
+  else if (oledCarouselIndex == 1)
+  {
     display.drawString(0, 0, oledOutputHumidity);
-  } else if (oledCarouselIndex == 2) {
+  }
+  else if (oledCarouselIndex == 2)
+  {
     display.drawString(0, 0, oledOutputIaq);
-  } else {
-    for(int i=0;i<MAX_NUMBER_HISTORY_VALUES;i++) {
-      uint8_t dx = (uint8_t)(64.0/maxIaq*iaqHistory[i]);
-      display.drawVerticalLine(i*BAR_WIDTH, 64-dx, dx);
-      display.drawVerticalLine(i*BAR_WIDTH+1, 64-dx, dx);
-       //display.drawVerticalLine(i, 0, iaqHistory[i]);
+  }
+  else
+  {
+    for (int i = 0; i < MAX_NUMBER_HISTORY_VALUES; i++)
+    {
+      uint8_t dx = (uint8_t)(64.0 / maxIaq * iaqHistory[i]);
+      display.drawVerticalLine(i * BAR_WIDTH, 64 - dx, dx);
+      display.drawVerticalLine(i * BAR_WIDTH + 1, 64 - dx, dx);
     }
   }
   display.display();
-  
-  if (oledCarouselIndex < 3) {
+
+  if (oledCarouselIndex < 3)
+  {
     oledCarouselIndex++;
-  } else {
+  }
+  else
+  {
     oledCarouselIndex = 0;
   }
 }
+#endif
 
+#ifdef USE_SINGLE_LED
 void setLedStatus()
 {
   if (iaqSensor.iaq > 151)
@@ -413,9 +461,10 @@ void setLedStatus()
   else
   {
     leds[0] = CRGB::Green;
-  }    
+  }
   FastLED.show();
 }
+#endif
 
 void loop()
 {
@@ -452,6 +501,7 @@ void loop()
     events.send(String(iaqSensor.pressure / 100).c_str(), "pressure", millis());
     events.send(String(iaqSensor.iaq).c_str(), "gas", millis());
 
+    #ifdef USE_SD_CARD
     if (!SD.exists("/iaqMeasurements.csv"))
     {
       //write header
@@ -474,6 +524,7 @@ void loop()
     {
       Serial.println("error opening iaqMeasurements.csv");
     }
+    #endif
   }
   else
   {
