@@ -10,14 +10,20 @@
 #include "SSD1306.h"
 
 #define USE_SD_CARD
-#define USE_OLED_DISPLAY
-#define USE_SINGLE_LED
+//#define USE_OLED_DISPLAY
+//#define USE_SINGLE_LED
 
 // Replace with your network credentials
 const char *ssid = "Fuchshof";
 const char *password = "Luftqualitaet";
+
+#ifdef USE_SD_CARD
 File myFile;
+#endif
+
+#ifdef USE_SINGLE_LED
 CRGB leds[1];
+#endif
 
 #ifdef USE_OLED_DISPLAY
 SSD1306 display(0x3c, 4, 15);
@@ -256,7 +262,8 @@ static void InitSensor()
   checkIaqSensorStatus();
 }
 
-static void InitLed() 
+#ifdef USE_SINGLE_LED
+static void InitSingleLED()
 {
   pinMode(13, OUTPUT);
   delay(50);
@@ -265,6 +272,7 @@ static void InitLed()
   FastLED.setBrightness(25); //0..255
   FastLED.setTemperature(Tungsten40W);
 }
+#endif
 
 void setup()
 {
@@ -281,10 +289,9 @@ void setup()
   InitSensor();
   InitWebserver();
 
-#ifdef SINGLE_LED
+#ifdef USE_SINGLE_LED
   InitSingleLED();
 #endif
-
 }
 
 void loadState(void)
@@ -411,15 +418,15 @@ void setOledStatus()
   display.clear();
   if (oledCarouselIndex == 0)
   {
-    display.drawString(0, 0, oledOutputTemp);
+    display.drawString(0, 20, oledOutputTemp);
   }
   else if (oledCarouselIndex == 1)
   {
-    display.drawString(0, 0, oledOutputHumidity);
+    display.drawString(0, 20, oledOutputHumidity);
   }
   else if (oledCarouselIndex == 2)
   {
-    display.drawString(0, 0, oledOutputIaq);
+    display.drawString(0, 20, oledOutputIaq);
   }
   else
   {
@@ -490,9 +497,14 @@ void loop()
     // store state in EEPROM
     updateState();
 
-    // set Led status
+// set Led status
+#ifdef USE_SINGLE_LED
     setLedStatus();
+#endif
+
+#ifdef USE_OLED_DISPLAY
     setOledStatus();
+#endif
 
     // Send Events to the Web Server with the Sensor Readings
     events.send("ping", NULL, millis());
@@ -501,7 +513,7 @@ void loop()
     events.send(String(iaqSensor.pressure / 100).c_str(), "pressure", millis());
     events.send(String(iaqSensor.iaq).c_str(), "gas", millis());
 
-    #ifdef USE_SD_CARD
+#ifdef USE_SD_CARD
     if (!SD.exists("/iaqMeasurements.csv"))
     {
       //write header
@@ -524,7 +536,7 @@ void loop()
     {
       Serial.println("error opening iaqMeasurements.csv");
     }
-    #endif
+#endif
   }
   else
   {
