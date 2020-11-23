@@ -23,6 +23,7 @@ const uint8_t bsec_config_iaq[] = {
 };
 
 #define STATE_SAVE_PERIOD UINT32_C(60 * 60 * 1000) // 360 minutes - 4 times a day
+#define MAX_NUMBER_HISTORY_VALUES 64
 
 // Helper functions declarations
 void checkIaqSensorStatus(void);
@@ -34,6 +35,9 @@ Bsec iaqSensor;
 String output;
 uint8_t bsecState[BSEC_MAX_STATE_BLOB_SIZE] = {0};
 uint16_t stateUpdateCounter = 0;
+uint8_t oledCarouselIndex = 0;
+
+uint8_t iaqHistory[MAX_NUMBER_HISTORY_VALUES] = {0};
 
 AsyncWebServer server(80);
 AsyncEventSource events("/events");
@@ -156,6 +160,7 @@ static void InitOledDisplay()
   delay(50);
   digitalWrite(16, HIGH);
   display.init();
+  display.setFont(ArialMT_Plain_24);
   display.clear();
   display.display();
 }
@@ -203,6 +208,8 @@ void setup()
 
   Wire.begin(4, 15);
 
+  EEPROM.begin(BSEC_MAX_STATE_BLOB_SIZE);
+
   iaqSensor.begin(BME680_I2C_ADDR_PRIMARY, Wire);
   output = "\nBSEC library version " + String(iaqSensor.version.major) + "." + String(iaqSensor.version.minor) + "." + String(iaqSensor.version.major_bugfix) + "." + String(iaqSensor.version.minor_bugfix);
   Serial.println(output);
@@ -248,6 +255,8 @@ void setup()
 
 void loadState(void)
 {
+  Serial.print("Size of EEPROM(0): ");
+  Serial.println(EEPROM.read(0));
   if (EEPROM.read(0) == BSEC_MAX_STATE_BLOB_SIZE)
   {
     // Existing state in EEPROM
@@ -348,6 +357,11 @@ void checkIaqSensorStatus(void)
 
 void setOledStatus() {
 
+  for(int i=MAX_NUMBER_HISTORY_VALUES-1;i>0;i--) {
+    iaqHistory[i]=iaqHistory[i-1];
+  }
+  iaqHistory[0]=(uint8_t)iaqSensor.iaq;
+
   String oledOutputIaq = "IAQ: ";
   oledOutputIaq += String(iaqSensor.iaq);
   String oledOutputTemp = "TEMP: ";
@@ -355,10 +369,26 @@ void setOledStatus() {
   String oledOutputHumidity = "HUM: ";
   oledOutputHumidity += String(iaqSensor.humidity);
   display.clear();
-  display.drawString(0, 0, oledOutputTemp);
-  display.drawString(0, 10, oledOutputHumidity);
-  display.drawString(0, 20, oledOutputIaq);
+  if (oledCarouselIndex == 0) {
+    display.drawString(0, 0, oledOutputTemp);
+  } else if (oledCarouselIndex == 1) {
+    display.drawString(0, 0, oledOutputHumidity);
+  } else if (oledCarouselIndex == 2) {
+    display.drawString(0, 0, oledOutputIaq);
+  } else {
+    for(int i=0;i<MAX_NUMBER_HISTORY_VALUES;i++) {
+      uint8_t dx = (uint8_t)(64.0/150*iaqHistory[i]);
+      display.drawVerticalLine(i*2, 64-dx, dx);
+       //display.drawVerticalLine(i, 0, iaqHistory[i]);
+    }
+  }
   display.display();
+  
+  if (oledCarouselIndex < 3) {
+    oledCarouselIndex++;
+  } else {
+    oledCarouselIndex = 0;
+  }
 }
 
 void setLedStatus()
