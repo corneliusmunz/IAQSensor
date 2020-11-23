@@ -23,7 +23,8 @@ const uint8_t bsec_config_iaq[] = {
 };
 
 #define STATE_SAVE_PERIOD UINT32_C(60 * 60 * 1000) // 360 minutes - 4 times a day
-#define MAX_NUMBER_HISTORY_VALUES 64
+#define BAR_WIDTH 4
+#define MAX_NUMBER_HISTORY_VALUES 32
 
 // Helper functions declarations
 void checkIaqSensorStatus(void);
@@ -357,10 +358,13 @@ void checkIaqSensorStatus(void)
 
 void setOledStatus() {
 
+  uint8_t maxIaq = 0;
   for(int i=MAX_NUMBER_HISTORY_VALUES-1;i>0;i--) {
     iaqHistory[i]=iaqHistory[i-1];
+    maxIaq = max(iaqHistory[i], maxIaq);
   }
   iaqHistory[0]=(uint8_t)iaqSensor.iaq;
+  maxIaq = max(iaqHistory[0], maxIaq);
 
   String oledOutputIaq = "IAQ: ";
   oledOutputIaq += String(iaqSensor.iaq);
@@ -377,8 +381,9 @@ void setOledStatus() {
     display.drawString(0, 0, oledOutputIaq);
   } else {
     for(int i=0;i<MAX_NUMBER_HISTORY_VALUES;i++) {
-      uint8_t dx = (uint8_t)(64.0/150*iaqHistory[i]);
-      display.drawVerticalLine(i*2, 64-dx, dx);
+      uint8_t dx = (uint8_t)(64.0/maxIaq*iaqHistory[i]);
+      display.drawVerticalLine(i*BAR_WIDTH, 64-dx, dx);
+      display.drawVerticalLine(i*BAR_WIDTH+1, 64-dx, dx);
        //display.drawVerticalLine(i, 0, iaqHistory[i]);
     }
   }
