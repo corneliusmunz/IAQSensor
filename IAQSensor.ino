@@ -9,9 +9,14 @@
 #include <FastLED.h>
 #include "SSD1306.h"
 
-#define USE_SD_CARD
+//#define USE_SD_CARD
 //#define USE_OLED_DISPLAY
-//#define USE_SINGLE_LED
+#define USE_SINGLE_LED
+#define NUM_LEDS 25
+
+#define IAQ_SDA 25
+#define IAQ_SCL 21
+#define IAQ_LED 27
 
 // Replace with your network credentials
 const char *ssid = "Fuchshof";
@@ -22,11 +27,11 @@ File myFile;
 #endif
 
 #ifdef USE_SINGLE_LED
-CRGB leds[1];
+CRGB leds[NUM_LEDS];
 #endif
 
 #ifdef USE_OLED_DISPLAY
-SSD1306 display(0x3c, 4, 15);
+SSD1306 display(0x3c, IAQ_SDA, IAQ_SCL);
 #define BAR_WIDTH 4
 #define MAX_NUMBER_HISTORY_VALUES 32
 uint8_t oledCarouselIndex = 0;
@@ -233,7 +238,7 @@ static void InitWebserver()
 
 static void InitSensor()
 {
-  Wire.begin(4, 15);
+  Wire.begin(IAQ_SDA, IAQ_SCL);
 
   EEPROM.begin(BSEC_MAX_STATE_BLOB_SIZE);
 
@@ -265,9 +270,9 @@ static void InitSensor()
 #ifdef USE_SINGLE_LED
 static void InitSingleLED()
 {
-  pinMode(13, OUTPUT);
+  pinMode(IAQ_LED, OUTPUT);
   delay(50);
-  FastLED.addLeds<WS2812B, 13, GRB>(leds, 1);
+  FastLED.addLeds<WS2812B, IAQ_LED, GRB>(leds, NUM_LEDS);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);
   FastLED.setBrightness(25); //0..255
   FastLED.setTemperature(Tungsten40W);
@@ -455,19 +460,26 @@ void setLedStatus()
 {
   if (iaqSensor.iaq > 151)
   {
-    leds[0] = CRGB::Red;
+    fill_solid( leds, NUM_LEDS, CRGB::Red);
+    //leds[0] = CRGB::Red;
   }
   else if (iaqSensor.iaq > 101)
   {
-    leds[0] = CRGB::Orange;
+        fill_solid( leds, NUM_LEDS, CRGB::Orange);
+
+    //leds[0] = CRGB::Orange;
   }
   else if (iaqSensor.iaq > 51)
   {
-    leds[0] = CRGB::Yellow;
+        fill_solid( leds, NUM_LEDS, CRGB::Yellow);
+
+    //leds[0] = CRGB::Yellow;
   }
   else
   {
-    leds[0] = CRGB::Green;
+        fill_solid( leds, NUM_LEDS, CRGB::Green);
+
+    //leds[0] = CRGB::Green;
   }
   FastLED.show();
 }
