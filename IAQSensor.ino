@@ -18,6 +18,7 @@
 #define IAQ_SDA 4
 #define IAQ_SCL 15
 #define IAQ_LED 13
+#define PIN_VIBRATION 33
 
 RTC_DS3231 rtc;
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
@@ -303,6 +304,11 @@ static void InitRTC()
   }
 }
 
+static void InitVibration()
+{
+  pinMode(PIN_VIBRATION, OUTPUT);
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -318,6 +324,7 @@ void setup()
 
   InitSensor();
   InitWebserver();
+  InitVibration();
 
 #ifdef USE_SINGLE_LED
   InitSingleLED();
@@ -426,6 +433,17 @@ void checkIaqSensorStatus(void)
   }
 }
 
+void activateVibration(size_t repeatCount = 3)
+{
+  for (size_t i = 0; i < repeatCount; i++)
+  {
+    digitalWrite(PIN_VIBRATION, HIGH);
+    delay(100);
+    digitalWrite(PIN_VIBRATION, LOW);
+    delay(100);
+  }
+}
+
 #ifdef USE_OLED_DISPLAY
 void setOledStatus()
 {
@@ -486,25 +504,20 @@ void setLedStatus()
   if (iaqSensor.iaq > 151)
   {
     fill_solid(leds, NUM_LEDS, CRGB::Red);
-    //leds[0] = CRGB::Red;
+    activateVibration(3);
   }
   else if (iaqSensor.iaq > 101)
   {
     fill_solid(leds, NUM_LEDS, CRGB::Orange);
-
-    //leds[0] = CRGB::Orange;
+    activateVibration(2);
   }
   else if (iaqSensor.iaq > 51)
   {
     fill_solid(leds, NUM_LEDS, CRGB::Yellow);
-
-    //leds[0] = CRGB::Yellow;
   }
   else
   {
     fill_solid(leds, NUM_LEDS, CRGB::Green);
-
-    //leds[0] = CRGB::Green;
   }
   FastLED.show();
 }
@@ -559,7 +572,6 @@ void loop()
       myFile.println("Time[ms]; rawTemperature; pressure; rawHumidity; gasResitance; iaq; iaqAccuracy; temperature; humidity; staticIaq; co2Equivalent; breathVocEquivalent");
       myFile.close(); // close the file
     }
-    Serial.println(now.timestamp());
 
     // Create/Open file
     myFile = SD.open("/iaqMeasurements.csv", FILE_APPEND);
