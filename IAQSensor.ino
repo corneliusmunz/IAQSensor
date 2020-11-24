@@ -8,15 +8,19 @@
 #include <SPI.h>
 #include <FastLED.h>
 #include "SSD1306.h"
+#include <RTClib.h>
 
-//#define USE_SD_CARD
-//#define USE_OLED_DISPLAY
+#define USE_SD_CARD
+#define USE_OLED_DISPLAY
 #define USE_SINGLE_LED
-#define NUM_LEDS 25
+#define NUM_LEDS 1
 
-#define IAQ_SDA 25
-#define IAQ_SCL 21
-#define IAQ_LED 27
+#define IAQ_SDA 4
+#define IAQ_SCL 15
+#define IAQ_LED 13
+
+RTC_DS3231 rtc;
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
 // Replace with your network credentials
 const char *ssid = "Fuchshof";
@@ -279,6 +283,26 @@ static void InitSingleLED()
 }
 #endif
 
+static void InitRTC()
+{
+  if (!rtc.begin())
+  {
+    Serial.println("Couldn't find RTC");
+    return;
+  }
+
+  if (rtc.lostPower())
+  {
+    Serial.println("RTC lost power, let's set the time!");
+    // When time needs to be set on a new device, or after a power loss, the
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    // This line sets the RTC with an explicit date & time, for example to set
+    // January 21, 2014 at 3am you would call:
+    // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+  }
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -288,6 +312,7 @@ void setup()
 #endif
 
 #ifdef USE_SD_CARD
+  InitRTC();
   InitSdCard();
 #endif
 
@@ -437,7 +462,7 @@ void setOledStatus()
   {
     for (int i = 0; i < MAX_NUMBER_HISTORY_VALUES; i++)
     {
-      uint8_t dx = (uint8_t)(64.0 / maxIaq * iaqHistory[i]);
+      uint8_t dx = (uint8_t)(64.0 / 200 * iaqHistory[i]);
       display.drawVerticalLine(i * BAR_WIDTH, 64 - dx, dx);
       display.drawVerticalLine(i * BAR_WIDTH + 1, 64 - dx, dx);
     }
@@ -460,24 +485,24 @@ void setLedStatus()
 {
   if (iaqSensor.iaq > 151)
   {
-    fill_solid( leds, NUM_LEDS, CRGB::Red);
+    fill_solid(leds, NUM_LEDS, CRGB::Red);
     //leds[0] = CRGB::Red;
   }
   else if (iaqSensor.iaq > 101)
   {
-        fill_solid( leds, NUM_LEDS, CRGB::Orange);
+    fill_solid(leds, NUM_LEDS, CRGB::Orange);
 
     //leds[0] = CRGB::Orange;
   }
   else if (iaqSensor.iaq > 51)
   {
-        fill_solid( leds, NUM_LEDS, CRGB::Yellow);
+    fill_solid(leds, NUM_LEDS, CRGB::Yellow);
 
     //leds[0] = CRGB::Yellow;
   }
   else
   {
-        fill_solid( leds, NUM_LEDS, CRGB::Green);
+    fill_solid(leds, NUM_LEDS, CRGB::Green);
 
     //leds[0] = CRGB::Green;
   }
@@ -491,7 +516,8 @@ void loop()
   unsigned long time_trigger = millis();
   if (iaqSensor.run())
   { // If new data is available
-    output = String(time_trigger);
+    DateTime now = rtc.now();
+    output = now.timestamp();
     output += "; " + String(iaqSensor.rawTemperature);
     output += "; " + String(iaqSensor.pressure);
     output += "; " + String(iaqSensor.rawHumidity);
@@ -533,6 +559,7 @@ void loop()
       myFile.println("Time[ms]; rawTemperature; pressure; rawHumidity; gasResitance; iaq; iaqAccuracy; temperature; humidity; staticIaq; co2Equivalent; breathVocEquivalent");
       myFile.close(); // close the file
     }
+    Serial.println(now.timestamp());
 
     // Create/Open file
     myFile = SD.open("/iaqMeasurements.csv", FILE_APPEND);
